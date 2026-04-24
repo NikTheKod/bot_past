@@ -4,7 +4,7 @@ import os
 import csv
 import re
 import aiohttp
-import json
+import random
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -17,22 +17,19 @@ from typing import Dict
 # --- КОНФИГ ---
 BOT_TOKEN = "8307763743:AAGt5tZAnzu8inHZse5X_N1dw-fIN9Ek1fU"
 ADMIN_IDS = [8444790051]
-CRYPTO_WALLET = "UQDwD5okkERUN_pl-trSFiAEVMVOgm35Q2choki984WdyRY4"
-PRICE_PER_REQUEST = 1.2
 
 logging.basicConfig(level=logging.INFO)
 
 # --- СОСТОЯНИЯ ---
 class Form(StatesGroup):
-    waiting_requests = State()
-    waiting_payment = State()
     waiting_query = State()
+    waiting_limit = State()
 
 class TicketStates(StatesGroup):
     waiting_title = State()
     waiting_desc = State()
 
-# --- ПЕРЕВОДЫ (ПОЛНЫЙ ТЕКСТ) ---
+# --- ПЕРЕВОДЫ ---
 t = {
     'ru': {
         'start': "🇷🇺 Добро пожаловать в ParsTape!\n\nВаш надёжный партнёр по парсингу маркетплейсов Wildberries и Ozon.",
@@ -44,49 +41,13 @@ t = {
                 "📈 *Удобная аналитика*\n"
                 "Графики, таблицы и отчёты для принятия правильных решений.\n\n"
                 "Выберите действие в меню ниже:",
-        'requests_info': "🕸️ *Парсинг Wildberries и Ozon*\n\n"
-                         "Автоматический сбор и анализ данных с Wildberries и Ozon. Цены, остатки, динамика продаж — всё в одном месте для принятия правильных решений.\n\n"
-                         "💰 *Цена:* 1 запрос (1 товар) = 1.2 ₽\n"
-                         "⭐ *1 звезда = 1.2 ₽*\n\n"
-                         "📝 Введите количество товаров, которое нужно собрать (от 1 до 500):",
-        'price_msg': "📊 *Ваш заказ:*\n\n"
-                     "• Количество товаров: {req} шт.\n"
-                     "• Стоимость: {price:.2f} ₽\n"
-                     "• Звёзд: {price:.0f} ⭐\n\n"
-                     "✅ Нажмите «Оплатить», чтобы продолжить оформление заказа.",
-        'free_admin': "👑 Вы вошли как администратор!\n\n"
-                      "Парсинг для вас абсолютно бесплатный.\n\n"
-                      "🔍 Введите поисковый запрос (например: iphone 15, наушники, телевизор, стиральная машина):",
-        'need_pay': "💳 *Оплата заказа*\n\n"
-                    "Сумма к оплате: {price:.2f} ₽\n\n"
-                    "💸 Кошелёк для оплаты (криптовалюта):\n"
-                    "`{wallet}`\n\n"
-                    "❗ *Инструкция:*\n"
-                    "1. Отправьте указанную сумму на кошелёк\n"
-                    "2. После оплаты нажмите кнопку «Я оплатил»\n"
-                    "3. Администратор проверит платёж и запустит парсинг\n\n"
-                    "✅ Нажмите «Я оплатил» после отправки средств:",
-        'wait_pay': "⏳ *Ожидание подтверждения*\n\n"
-                    "Ваш запрос на оплату отправлен администратору.\n"
-                    "Пожалуйста, ожидайте подтверждения. Это может занять несколько минут.\n\n"
-                    "Администратор проверит платёж и запустит парсинг автоматически.",
-        'pay_ok': "✅ *Оплата подтверждена!*\n\n"
-                  "Ваш платёж успешно подтверждён администратором.\n\n"
-                  "🔍 Теперь введите поисковый запрос для сбора товаров:",
-        'pay_no': "❌ *Оплата не подтверждена*\n\n"
-                  "К сожалению, ваш платёж не был подтверждён администратором.\n"
-                  "Пожалуйста, обратитесь в поддержку: /support\n\n"
-                  "Возможно, вы отправили неверную сумму или неправильный кошелёк.",
-        'ask_query': "🔍 *Введите поисковый запрос*\n\n"
-                     "Например:\n"
-                     "• iphone 15\n"
-                     "• наушники беспроводные\n"
-                     "• телевизор samsung\n"
-                     "• стиральная машина lg\n\n"
-                     "Чем точнее запрос, тем лучше результат:",
+        'parsing_info': "🕸️ *Парсинг Wildberries и Ozon*\n\n"
+                        "Автоматический сбор и анализ данных с Wildberries и Ozon.\n\n"
+                        "📝 Введите поисковый запрос (например: iphone, наушники, телевизор):",
+        'parsing_limit': "📊 Введите количество товаров для сбора (от 1 до 50):",
         'parsing_start': "🔄 *Парсинг запущен!*\n\n"
                          "Начинаю сбор данных с Wildberries и Ozon.\n"
-                         "Это может занять от 10 до 30 секунд в зависимости от количества товаров.\n\n"
+                         "Это может занять от 10 до 30 секунд.\n\n"
                          "Пожалуйста, подождите...",
         'parsing_done': "✅ *Парсинг успешно завершён!*\n\n"
                         "Все данные собраны и сохранены в CSV файлы.\n"
@@ -94,9 +55,8 @@ t = {
         'no_results': "❌ *Ничего не найдено*\n\n"
                       "По вашему запросу «{query}» не удалось найти товары.\n\n"
                       "💡 *Рекомендации:*\n"
-                      "• Попробуйте более общий запрос (например, «телефон» вместо «iphone 15 pro max»)\n"
-                      "• Проверьте правильность написания\n"
-                      "• Попробуйте запрос на русском или английском языке\n\n"
+                      "• Попробуйте более общий запрос\n"
+                      "• Проверьте правильность написания\n\n"
                       "🔄 Нажмите «Парсинг» в меню, чтобы попробовать снова.",
         'wb_found': "📦 *Wildberries — найденные товары*\n\n"
                     "✅ Собрано товаров: {count} шт.\n"
@@ -104,9 +64,8 @@ t = {
         'ozon_found': "📦 *Ozon — найденные товары*\n\n"
                       "✅ Собрано товаров: {count} шт.\n"
                       "📊 Файл с подробным списком прикреплён ниже.",
-        'invalid_num': "❌ *Ошибка ввода*\n\n"
-                       "Пожалуйста, введите целое число от 1 до 500.\n\n"
-                       "Примеры правильного ввода: 10, 25, 100, 500",
+        'invalid_limit': "❌ *Ошибка ввода*\n\n"
+                         "Пожалуйста, введите целое число от 1 до 50.",
         'settings': "⚙️ *Настройки*\n\n"
                     "Здесь вы можете настроить параметры бота:",
         'support': "🆘 *Поддержка*\n\n"
@@ -115,19 +74,15 @@ t = {
         'parsing_btn': "🕸️ Парсинг",
         'back': "◀️ Назад",
         'menu': "🏠 Главное меню",
-        'pay_btn': "💳 Оплатить",
-        'i_paid_btn': "✅ Я оплатил",
         'change_lang': "🌐 Сменить язык",
         'create_ticket': "📝 Создать тикет",
         'ticket_title': "📝 *Создание тикета*\n\n"
                         "Введите тему вашего обращения (кратко опишите проблему):",
         'ticket_desc': "📄 *Описание проблемы*\n\n"
-                       "Теперь подробно опишите вашу проблему или вопрос.\n"
-                       "Чем подробнее, тем быстрее мы сможем вам помочь:",
+                       "Теперь подробно опишите вашу проблему или вопрос:",
         'ticket_sent': "✅ *Тикет отправлен!*\n\n"
                        "Ваше обращение передано администраторам.\n"
-                       "Ответ придет в этот чат, как только администратор ответит.\n\n"
-                       "Ожидайте...",
+                       "Ответ придет в этот чат, как только администратор ответит.",
         'ticket_new': "📩 *НОВЫЙ ТИКЕТ*\n\n"
                       "👤 Отправитель: {name}\n"
                       "🆔 ID пользователя: {user}\n"
@@ -135,190 +90,99 @@ t = {
                       "📄 Описание: {desc}\n\n"
                       "💬 Чтобы ответить: /reply {user} [текст ответа]\n"
                       "🔒 Чтобы закрыть тикет: /close_ticket {user}",
-        'reply_format': "📝 *Формат команды:*\n\n"
-                        "/reply USER_ID ТЕКСТ ОТВЕТА\n\n"
-                        "Пример: /reply 123456789 Спасибо за обращение!",
-        'reply_sent': "✅ *Ответ отправлен!*\n\n"
-                      "Ваш ответ успешно доставлен пользователю.",
-        'reply_msg': "✉️ *Ответ поддержки*\n\n"
-                     "{text}\n\n"
-                     "🔒 Если ваша проблема решена, нажмите /close_ticket",
-        'ticket_closed': "✅ *Тикет закрыт*\n\n"
-                         "Ваше обращение успешно закрыто.\n"
-                         "Спасибо, что пользуетесь ParsTape!",
-        'no_ticket': "❌ *Нет активных тикетов*\n\n"
-                     "У вас нет открытых обращений.\n"
-                     "Если нужна помощь, создайте новый тикет через меню Поддержка.",
-        'ticket_closed_admin': "✅ *Тикет закрыт администратором*\n\n"
-                               "Тикет пользователя {user} успешно закрыт.",
-        'unknown': "❌ *Неизвестная команда*\n\n"
-                   "Пожалуйста, используйте кнопки меню для навигации.\n\n"
-                   "Если вы не видите меню, нажмите /start",
+        'reply_format': "📝 *Формат команды:*\n\n/reply USER_ID ТЕКСТ ОТВЕТА",
+        'reply_sent': "✅ *Ответ отправлен!*",
+        'reply_msg': "✉️ *Ответ поддержки*\n\n{text}\n\n🔒 Если проблема решена, нажмите /close_ticket",
+        'ticket_closed': "✅ *Тикет закрыт*\n\nСпасибо за обращение!",
+        'no_ticket': "❌ *Нет активных тикетов*",
+        'ticket_closed_admin': "✅ *Тикет закрыт администратором*\n\nТикет пользователя {user} закрыт.",
+        'unknown': "❌ *Неизвестная команда*\n\nИспользуйте кнопки меню.",
         'admin_stats': "✅ *Панель администратора*\n\n"
                        "📊 *Статистика бота:*\n\n"
-                       f"• Активных тикетов: {{tickets}}\n"
-                       f"• Ожидают подтверждения оплаты: {{payments}}\n\n"
+                       f"• Активных тикетов: {{tickets}}\n\n"
                        "📌 *Доступные команды:*\n"
                        "• /reply USER_ID текст — ответить пользователю\n"
                        "• /close_ticket USER_ID — закрыть тикет\n"
-                       "• /stats — показать статистику\n\n"
-                       "💰 *Для подтверждения оплаты:*\n"
-                       "• admapp_USER_ID — подтвердить оплату\n"
-                       "• admin_USER_ID — отклонить оплату",
-        'confirm_payment': "💰 *ЗАПРОС ПОДТВЕРЖДЕНИЯ ОПЛАТЫ*\n\n"
-                           "👤 Пользователь: {name}\n"
-                           "🆔 ID: {user}\n"
-                           "📊 Количество товаров: {req} шт.\n"
-                           "💰 Сумма к оплате: {price:.2f} ₽\n\n"
-                           "✅ admapp_{user} — подтвердить оплату\n"
-                           "❌ admin_{user} — отклонить оплату",
-        'confirm_ok': "✅ *Оплата подтверждена*\n\n"
-                      "Пользователь {user} получит доступ к парсингу.",
-        'reject_ok': "❌ *Оплата отклонена*\n\n"
-                     "Пользователь {user} уведомлён об отклонении платежа.",
-        'waiting_payment': "⏳ *Ожидание оплаты*\n\n"
-                           "Ваш заказ создан. Пожалуйста, оплатите и нажмите «Я оплатил».",
-        'payment_info': "💳 *Реквизиты для оплаты*\n\n"
-                        "Кошелёк: `{wallet}`\n\n"
-                        "Сумма: {price:.2f} ₽\n\n"
-                        "После оплаты нажмите кнопку «Я оплатил».",
+                       "• /stats — показать статистику",
+        'tech_work': "🔧 *Технические работы*\n\n"
+                     "Парсинг временно доступен только для администраторов.\n"
+                     "Ведутся технические работы по улучшению сервиса.\n\n"
+                     "Приносим извинения за неудобства!",
+        'admin_only': "👑 *Только для администраторов*\n\n"
+                      "Парсинг временно доступен только администраторам.\n"
+                      "Пожалуйста, подождите или создайте тикет.",
     },
     'en': {
-        'start': "🇬🇧 Welcome to ParsTape!\n\nYour reliable marketplace parsing partner for Wildberries and Ozon.",
-        'main': "📊 *ParsTape — Your Marketplace Expert*\n\n"
-                "🟢 *Real-time Data*\n"
-                "Prices and stocks update every 15 minutes.\n\n"
-                "🤖 *Automated Parsing*\n"
-                "Our system collects data automatically.\n\n"
-                "📈 *Convenient Analytics*\n"
-                "Charts, tables, and reports.\n\n"
-                "Choose an action from the menu below:",
-        'requests_info': "🕸️ *Wildberries & Ozon Parsing*\n\n"
-                         "Automated data collection from Wildberries and Ozon.\n\n"
-                         "💰 *Price:* 1 request (1 item) = 1.2 ₽\n"
-                         "⭐ *1 star = 1.2 ₽*\n\n"
-                         "📝 Enter the number of items to collect (1 to 500):",
-        'price_msg': "📊 *Your Order:*\n\n"
-                     "• Items: {req} pcs\n"
-                     "• Cost: {price:.2f} ₽\n"
-                     "• Stars: {price:.0f} ⭐\n\n"
-                     "✅ Click 'Pay' to continue:",
-        'free_admin': "👑 Admin access granted!\n\n"
-                      "Parsing is free for administrators.\n\n"
-                      "🔍 Enter search query (e.g., iphone 15, headphones, TV):",
-        'need_pay': "💳 *Order Payment*\n\n"
-                    "Amount to pay: {price:.2f} ₽\n\n"
-                    "💸 Wallet:\n`{wallet}`\n\n"
-                    "📌 *Instructions:*\n"
-                    "1. Send the amount to the wallet\n"
-                    "2. Click 'I paid' after sending\n"
-                    "3. Admin will verify and start parsing\n\n"
-                    "✅ Click 'I paid' after sending:",
-        'wait_pay': "⏳ *Awaiting Confirmation*\n\n"
-                    "Your payment request has been sent to admin.\n"
-                    "Please wait for confirmation.",
-        'pay_ok': "✅ *Payment Confirmed!*\n\n"
-                  "Your payment has been confirmed.\n\n"
-                  "🔍 Now enter your search query:",
-        'pay_no': "❌ *Payment Not Confirmed*\n\n"
-                  "Your payment was not confirmed.\n"
-                  "Please contact support: /support",
-        'ask_query': "🔍 *Enter Search Query*\n\n"
-                     "Examples:\n"
-                     "• iphone 15\n"
-                     "• wireless headphones\n"
-                     "• samsung tv\n\n"
-                     "Enter your query:",
-        'parsing_start': "🔄 *Parsing Started!*\n\n"
-                         "Collecting data from Wildberries and Ozon.\n"
-                         "This may take 10-30 seconds.\n\n"
-                         "Please wait...",
-        'parsing_done': "✅ *Parsing Completed!*\n\n"
-                        "All data collected and saved.\n"
-                        "Results attached below:",
-        'no_results': "❌ *No Results Found*\n\n"
-                      "No products found for '{query}'.\n\n"
-                      "💡 *Tips:*\n"
-                      "• Try a more general query\n"
-                      "• Check spelling\n"
-                      "• Try Russian or English\n\n"
-                      "Click 'Parsing' in menu to try again.",
-        'wb_found': "📦 *Wildberries Results*\n\n"
-                    "✅ Items found: {count}\n"
-                    "📊 File attached below.",
-        'ozon_found': "📦 *Ozon Results*\n\n"
-                      "✅ Items found: {count}\n"
-                      "📊 File attached below.",
-        'invalid_num': "❌ *Invalid Input*\n\n"
-                       "Please enter a number from 1 to 500.",
-        'settings': "⚙️ *Settings*\n\n"
-                    "Configure bot parameters:",
-        'support': "🆘 *Support*\n\n"
-                   "Create a ticket and admin will contact you.",
+        'start': "🇬🇧 Welcome to ParsTape!",
+        'main': "📊 *ParsTape — Marketplace Expert*\n\nChoose an action:",
+        'parsing_info': "🕸️ *Parsing WB & Ozon*\n\nEnter search query:",
+        'parsing_limit': "📊 Enter items count (1-50):",
+        'parsing_start': "🔄 Parsing started...\nPlease wait.",
+        'parsing_done': "✅ Parsing completed!\nResults attached:",
+        'no_results': "❌ No results for '{query}'",
+        'wb_found': "📦 *Wildberries:* {count} items",
+        'ozon_found': "📦 *Ozon:* {count} items",
+        'invalid_limit': "❌ Enter 1-50",
+        'settings': "⚙️ Settings",
+        'support': "🆘 Support",
         'parsing_btn': "🕸️ Parsing",
         'back': "◀️ Back",
-        'menu': "🏠 Main Menu",
-        'pay_btn': "💳 Pay",
-        'i_paid_btn': "✅ I paid",
-        'change_lang': "🌐 Change language",
+        'menu': "🏠 Menu",
+        'change_lang': "🌐 Language",
         'create_ticket': "📝 Create ticket",
-        'ticket_title': "📝 *Create Ticket*\n\nEnter ticket title:",
-        'ticket_desc': "📄 *Description*\n\nDescribe your problem in detail:",
-        'ticket_sent': "✅ *Ticket Sent!*\n\n"
-                       "Your request has been sent to admins.\n"
-                       "You will receive a reply here.",
-        'ticket_new': "📩 *NEW TICKET*\n\n"
-                      "👤 From: {name}\n"
-                      "🆔 ID: {user}\n"
-                      "📝 Title: {title}\n"
-                      "📄 Description: {desc}\n\n"
-                      "💬 /reply {user} [reply text]\n"
-                      "🔒 /close_ticket {user}",
-        'reply_format': "📝 *Command format:*\n\n/reply USER_ID TEXT",
-        'reply_sent': "✅ *Reply sent!*",
-        'reply_msg': "✉️ *Support Reply*\n\n{text}\n\n🔒 Click /close_ticket if solved",
-        'ticket_closed': "✅ *Ticket closed*\n\nThank you for using ParsTape!",
-        'no_ticket': "❌ *No active tickets*",
-        'ticket_closed_admin': "✅ *Ticket closed by admin*\n\nUser {user} ticket closed.",
-        'unknown': "❌ *Unknown command*\n\nPlease use menu buttons.",
-        'admin_stats': "✅ *Admin Panel*\n\n"
-                       "📊 *Statistics:*\n\n"
-                       f"• Active tickets: {{tickets}}\n"
-                       f"• Pending payments: {{payments}}\n\n"
-                       "📌 *Commands:*\n"
-                       "• /reply USER_ID text\n"
-                       "• /close_ticket USER_ID\n\n"
-                       "💰 *Payment commands:*\n"
-                       "• admapp_USER_ID - confirm\n"
-                       "• admin_USER_ID - reject",
-        'confirm_payment': "💰 *PAYMENT CONFIRMATION*\n\n"
-                           "👤 User: {name}\n"
-                           "🆔 ID: {user}\n"
-                           "📊 Items: {req}\n"
-                           "💰 Amount: {price:.2f} ₽\n\n"
-                           "✅ admapp_{user} - confirm\n"
-                           "❌ admin_{user} - reject",
-        'confirm_ok': "✅ *Payment confirmed*\n\nUser {user} can now parse.",
-        'reject_ok': "❌ *Payment rejected*\n\nUser {user} notified.",
-        'waiting_payment': "⏳ *Waiting for payment*\n\nPlease pay and click 'I paid'.",
-        'payment_info': "💳 *Payment details*\n\nWallet: `{wallet}`\nAmount: {price:.2f} ₽",
+        'ticket_title': "📝 Enter ticket title:",
+        'ticket_desc': "📄 Describe your problem:",
+        'ticket_sent': "✅ Ticket sent!",
+        'ticket_new': "📩 *NEW TICKET*\nFrom: {name}\nID: {user}\nTitle: {title}\nDesc: {desc}\n\n/reply {user} [text]",
+        'reply_format': "📝 /reply USER_ID TEXT",
+        'reply_sent': "✅ Reply sent",
+        'reply_msg': "✉️ *Reply:*\n{text}\n\n/close_ticket",
+        'ticket_closed': "✅ Ticket closed",
+        'no_ticket': "❌ No active tickets",
+        'ticket_closed_admin': "✅ Ticket for user {user} closed",
+        'unknown': "❌ Unknown command",
+        'admin_stats': "✅ *Admin Panel*\nTickets: {tickets}",
+        'tech_work': "🔧 *Technical work*\nParsing temporarily for admins only.",
+        'admin_only': "👑 *Admin only*\nParsing is temporarily for admins only.",
     }
 }
 
 user_lang: Dict[int, str] = {}
-user_orders: Dict[int, dict] = {}
-pending_payments: Dict[int, dict] = {}
 active_tickets: Dict[int, dict] = {}
 
-# ==================== ПАРСЕР (РЕАЛЬНО РАБОТАЮЩИЙ) ====================
+# ==================== ПАРСЕР С ОБХОДОМ ЗАЩИТЫ ====================
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+]
+
+def get_random_headers():
+    return {
+        'User-Agent': random.choice(USER_AGENTS),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0',
+    }
+
 async def parse_wildberries(query: str, limit: int):
     products = []
     try:
-        # API Wildberries
+        # API Wildberries с обходом
         url = f"https://search.wb.ru/exactmatch/ru/common/v4/search?appType=1&curr=rub&dest=-1257786&query={query}&resultset=catalog&sort=popular&spp=30&limit={limit}"
         
+        headers = get_random_headers()
+        headers['Accept'] = 'application/json'
+        
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}) as resp:
+            async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if 'data' in data and 'products' in data['data']:
@@ -344,33 +208,63 @@ async def parse_wildberries(query: str, limit: int):
 async def parse_ozon(query: str, limit: int):
     products = []
     try:
-        # Прямой запрос к API Ozon (неофициальный, но рабочий)
-        url = f"https://www.ozon.ru/api/composer-api.bx/_action/search?text={query}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-        }
+        # Прямой запрос к странице поиска Ozon
+        url = f"https://www.ozon.ru/search/?text={query}"
+        
+        headers = get_random_headers()
         
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
-                    data = await resp.json()
-                    # Парсим результаты
-                    if 'layout' in data and 'search' in str(data):
-                        # Поиск в JSON
-                        import json as jsonlib
-                        text = jsonlib.dumps(data)
-                        matches = re.findall(r'"title":"([^"]+)".*?"price":"([^"]+)"', text)
-                        for match in matches[:limit]:
-                            name = match[0]
-                            price = float(match[1]) if match[1] else 0
-                            if name and price > 0:
-                                products.append({
-                                    'name': name[:100],
-                                    'price': int(price),
-                                    'link': f"https://www.ozon.ru/search/?text={query}"
-                                })
+                    html = await resp.text()
+                    
+                    # Ищем JSON данные в HTML
+                    json_match = re.search(r'window\.__STATE__\s*=\s*({.*?});', html, re.DOTALL)
+                    if json_match:
+                        try:
+                            data = json.loads(json_match.group(1))
+                            # Ищем товары в JSON
+                            for key in list(data.keys())[:20]:
+                                if 'product' in key.lower() or 'card' in key.lower():
+                                    item = data.get(key, {})
+                                    name = item.get('title', '') or item.get('name', '')
+                                    price_info = item.get('price', {})
+                                    price = price_info.get('price', '') or price_info.get('value', '')
+                                    if isinstance(price, str):
+                                        price = re.sub(r'[^\d]', '', price)
+                                    try:
+                                        price = int(price) if price else 0
+                                    except:
+                                        price = 0
+                                    if name and price > 0 and len(products) < limit:
+                                        products.append({
+                                            'name': name[:100],
+                                            'price': price,
+                                            'link': url
+                                        })
+                        except:
+                            pass
+                    
+                    # Если JSON не помог, ищем простые карточки
+                    if len(products) < limit:
+                        # Поиск ссылок на товары
+                        links = re.findall(r'href="(/product/[^"]+)"', html)
+                        titles = re.findall(r'<span[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</span>', html)
+                        
+                        for i in range(min(len(links), len(titles), limit)):
+                            if i < len(links) and i < len(titles):
+                                name = titles[i].strip()
+                                price = 0
+                                # Поиск цены рядом
+                                price_match = re.search(r'(\d[\d\s]*)\s*₽', html[max(0, html.find(name)-500):html.find(name)+500])
+                                if price_match:
+                                    price = int(re.sub(r'\s', '', price_match.group(1)))
+                                if name and price > 0:
+                                    products.append({
+                                        'name': name[:100],
+                                        'price': price,
+                                        'link': f"https://www.ozon.ru{links[i]}"
+                                    })
                 else:
                     print(f"Ozon статус: {resp.status}")
     except Exception as e:
@@ -381,11 +275,9 @@ async def parse_ozon(query: str, limit: int):
 async def parse_both(query: str, limit: int):
     print(f"🔍 Парсинг: {query}, лимит: {limit}")
     
-    # Парсим параллельно
-    wb_task = parse_wildberries(query, limit)
-    ozon_task = parse_ozon(query, limit)
-    
-    wb, ozon = await asyncio.gather(wb_task, ozon_task)
+    wb = await parse_wildberries(query, limit)
+    await asyncio.sleep(random.uniform(1, 2))
+    ozon = await parse_ozon(query, limit)
     
     print(f"WB: {len(wb)} товаров")
     print(f"Ozon: {len(ozon)} товаров")
@@ -398,8 +290,8 @@ async def parse_both(query: str, limit: int):
     summary_file = f"ParsTape_Summary_{safe_query}_{timestamp}.csv"
     with open(summary_file, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
-        writer.writerow(['query', 'wb_count', 'ozon_count', 'total', 'timestamp'])
-        writer.writerow([query, len(wb), len(ozon), len(wb)+len(ozon), timestamp])
+        writer.writerow(['query', 'wb_count', 'ozon_count', 'total', 'date'])
+        writer.writerow([query, len(wb), len(ozon), len(wb)+len(ozon), datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
     files['summary'] = summary_file
     
     # Wildberries
@@ -407,7 +299,7 @@ async def parse_both(query: str, limit: int):
         wb_file = f"ParsTape_WB_{safe_query}_{timestamp}.csv"
         with open(wb_file, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
-            writer.writerow(['number', 'name', 'price', 'link'])
+            writer.writerow(['№', 'Название', 'Цена (₽)', 'Ссылка'])
             for i, p in enumerate(wb, 1):
                 writer.writerow([i, p['name'], p['price'], p['link']])
         files['wb'] = wb_file
@@ -417,7 +309,7 @@ async def parse_both(query: str, limit: int):
         ozon_file = f"ParsTape_Ozon_{safe_query}_{timestamp}.csv"
         with open(ozon_file, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
-            writer.writerow(['number', 'name', 'price', 'link'])
+            writer.writerow(['№', 'Название', 'Цена (₽)', 'Ссылка'])
             for i, p in enumerate(ozon, 1):
                 writer.writerow([i, p['name'], p['price'], p['link']])
         files['ozon'] = ozon_file
@@ -445,18 +337,6 @@ def get_lang_keyboard():
         [InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en")]
     ])
 
-def get_payment_keyboard(lang):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t[lang]['pay_btn'], callback_data="pay")],
-        [InlineKeyboardButton(text=t[lang]['back'], callback_data="back")]
-    ])
-
-def get_i_paid_keyboard(lang):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t[lang]['i_paid_btn'], callback_data="i_paid")],
-        [InlineKeyboardButton(text=t[lang]['back'], callback_data="back")]
-    ])
-
 def get_support_keyboard(lang):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t[lang]['create_ticket'], callback_data="create_ticket")],
@@ -466,6 +346,12 @@ def get_support_keyboard(lang):
 def get_cancel_keyboard(lang):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_ticket")]
+    ])
+
+def get_settings_keyboard(lang):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t[lang]['change_lang'], callback_data="change_lang")],
+        [InlineKeyboardButton(text=t[lang]['back'], callback_data="back")]
     ])
 
 bot = Bot(token=BOT_TOKEN)
@@ -505,185 +391,96 @@ async def back_to_main(event, state: FSMContext):
 
 @dp.message(F.text.in_({'🕸️ Парсинг', '🕸️ Parsing'}))
 async def parsing_start(message: Message, state: FSMContext):
-    lang = user_lang.get(message.from_user.id, 'ru')
-    await state.set_state(Form.waiting_requests)
-    await message.answer(t[lang]['requests_info'], parse_mode="Markdown", reply_markup=get_back_keyboard(lang))
-
-@dp.message(Form.waiting_requests)
-async def get_requests(message: Message, state: FSMContext):
-    lang = user_lang.get(message.from_user.id, 'ru')
-    try:
-        count = int(message.text)
-        if count < 1 or count > 500:
-            await message.answer(t[lang]['invalid_num'])
-            return
-        
-        price = count * PRICE_PER_REQUEST
-        await state.update_data(requests=count, price=price)
-        
-        user_orders[message.from_user.id] = {'requests': count, 'price': price}
-        
-        if message.from_user.id in ADMIN_IDS:
-            await state.set_state(Form.waiting_query)
-            await message.answer(t[lang]['free_admin'], parse_mode="Markdown")
-        else:
-            text = t[lang]['price_msg'].format(req=count, price=price)
-            await message.answer(text, parse_mode="Markdown", reply_markup=get_payment_keyboard(lang))
-            await state.set_state(Form.waiting_payment)
-    except ValueError:
-        await message.answer(t[lang]['invalid_num'])
-
-@dp.callback_query(lambda c: c.data == "pay")
-async def process_pay(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
+    user_id = message.from_user.id
     lang = user_lang.get(user_id, 'ru')
-    data = await state.get_data()
-    price = data.get('price', 0)
     
-    text = t[lang]['need_pay'].format(price=price, wallet=CRYPTO_WALLET)
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_i_paid_keyboard(lang))
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "i_paid")
-async def i_paid(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    lang = user_lang.get(user_id, 'ru')
-    data = await state.get_data()
-    
-    pending_payments[user_id] = {
-        'requests': data.get('requests', 0),
-        'price': data.get('price', 0),
-        'name': callback.from_user.full_name
-    }
-    
-    # Отправляем админу
-    for admin_id in ADMIN_IDS:
-        await bot.send_message(
-            admin_id,
-            t[lang]['confirm_payment'].format(
-                name=callback.from_user.full_name,
-                user=user_id,
-                req=data.get('requests', 0),
-                price=data.get('price', 0)
-            ),
-            parse_mode="Markdown"
-        )
-    
-    await callback.message.edit_text(t[lang]['wait_pay'])
-    await callback.answer()
-
-# КОМАНДА ДЛЯ ПОДТВЕРЖДЕНИЯ ОПЛАТЫ: admapp_123456789
-@dp.message(lambda m: m.text and m.text.startswith('admapp_'))
-async def confirm_payment(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("⛔ Нет прав")
+    # Проверка: только админы могут парсить
+    if user_id not in ADMIN_IDS:
+        await message.answer(t[lang]['admin_only'], parse_mode="Markdown")
         return
     
-    try:
-        user_id = int(message.text.replace('admapp_', '').strip())
-        lang = user_lang.get(user_id, 'ru')
-        
-        if user_id in pending_payments:
-            del pending_payments[user_id]
-            
-            await bot.send_message(user_id, t[lang]['pay_ok'], parse_mode="Markdown")
-            await bot.send_message(user_id, t[lang]['ask_query'], parse_mode="Markdown")
-            
-            await dp.fsm.storage.set_state(key=(user_id, user_id), state=Form.waiting_query)
-            
-            await message.answer(t[lang]['confirm_ok'].format(user=user_id))
-        else:
-            await message.answer(f"❌ Платёж для {user_id} не найден")
-    except Exception as e:
-        await message.answer(f"Ошибка: {e}")
-
-# КОМАНДА ДЛЯ ОТКЛОНЕНИЯ ОПЛАТЫ: admin_123456789
-@dp.message(lambda m: m.text and m.text.startswith('admin_'))
-async def reject_payment(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("⛔ Нет прав")
-        return
-    
-    try:
-        user_id = int(message.text.replace('admin_', '').strip())
-        lang = user_lang.get(user_id, 'ru')
-        
-        if user_id in pending_payments:
-            del pending_payments[user_id]
-            await bot.send_message(user_id, t[lang]['pay_no'], parse_mode="Markdown")
-            await message.answer(t[lang]['reject_ok'].format(user=user_id))
-        else:
-            await message.answer(f"❌ Платёж для {user_id} не найден")
-    except Exception as e:
-        await message.answer(f"Ошибка: {e}")
+    await state.set_state(Form.waiting_query)
+    await message.answer(t[lang]['parsing_info'], parse_mode="Markdown", reply_markup=get_back_keyboard(lang))
 
 @dp.message(Form.waiting_query)
-async def get_search_query(message: Message, state: FSMContext):
+async def get_query(message: Message, state: FSMContext):
     user_id = message.from_user.id
     lang = user_lang.get(user_id, 'ru')
     query = message.text.strip()
     
     await state.update_data(query=query)
-    
-    order = user_orders.get(user_id, {})
-    limit = order.get('requests', 10)
-    
-    wait_msg = await message.answer(t[lang]['parsing_start'], parse_mode="Markdown")
+    await message.answer(t[lang]['parsing_limit'], parse_mode="Markdown")
+    await state.set_state(Form.waiting_limit)
+
+@dp.message(Form.waiting_limit)
+async def get_limit_and_parse(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    lang = user_lang.get(user_id, 'ru')
     
     try:
-        files, wb_products, ozon_products = await parse_both(query, limit)
-        await wait_msg.delete()
+        limit = int(message.text)
+        if limit < 1 or limit > 50:
+            await message.answer(t[lang]['invalid_limit'])
+            return
         
-        if not wb_products and not ozon_products:
-            await message.answer(t[lang]['no_results'].format(query=query), parse_mode="Markdown")
-        else:
-            await message.answer(t[lang]['parsing_done'], parse_mode="Markdown")
+        data = await state.get_data()
+        query = data.get('query', '')
+        
+        wait_msg = await message.answer(t[lang]['parsing_start'], parse_mode="Markdown")
+        
+        try:
+            files, wb_products, ozon_products = await parse_both(query, limit)
+            await wait_msg.delete()
             
-            if wb_products:
-                await message.answer_document(
-                    FSInputFile(files['wb']),
-                    caption=t[lang]['wb_found'].format(count=len(wb_products))
-                )
+            if not wb_products and not ozon_products:
+                await message.answer(t[lang]['no_results'].format(query=query), parse_mode="Markdown")
             else:
-                await message.answer("❌ Wildberries: ничего не найдено")
+                await message.answer(t[lang]['parsing_done'], parse_mode="Markdown")
+                
+                if wb_products:
+                    await message.answer_document(
+                        FSInputFile(files['wb']),
+                        caption=t[lang]['wb_found'].format(count=len(wb_products))
+                    )
+                else:
+                    await message.answer("❌ Wildberries: ничего не найдено")
+                
+                if ozon_products:
+                    await message.answer_document(
+                        FSInputFile(files['ozon']),
+                        caption=t[lang]['ozon_found'].format(count=len(ozon_products))
+                    )
+                else:
+                    await message.answer("❌ Ozon: ничего не найдено")
+                
+                if 'summary' in files:
+                    await message.answer_document(FSInputFile(files['summary']), caption="📈 Сводная статистика")
             
-            if ozon_products:
-                await message.answer_document(
-                    FSInputFile(files['ozon']),
-                    caption=t[lang]['ozon_found'].format(count=len(ozon_products))
-                )
-            else:
-                await message.answer("❌ Ozon: ничего не найдено")
+            await message.answer(t[lang]['main'], parse_mode="Markdown", reply_markup=get_main_keyboard(lang))
+            await state.clear()
             
-            if 'summary' in files:
-                await message.answer_document(FSInputFile(files['summary']), caption="📈 Сводная статистика")
-        
-        await message.answer(t[lang]['main'], parse_mode="Markdown", reply_markup=get_main_keyboard(lang))
-        await state.clear()
-        
-        # Удаляем файлы через 5 минут
-        async def cleanup():
-            await asyncio.sleep(300)
-            for f in files.values():
-                try:
-                    os.remove(f)
-                except:
-                    pass
-        asyncio.create_task(cleanup())
-        
-    except Exception as e:
-        logging.error(f"Parse error: {e}")
-        await wait_msg.delete()
-        await message.answer("❌ Ошибка парсинга. Попробуйте позже.")
+            # Удаляем файлы через 5 минут
+            async def cleanup():
+                await asyncio.sleep(300)
+                for f in files.values():
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
+            asyncio.create_task(cleanup())
+            
+        except Exception as e:
+            logging.error(f"Parse error: {e}")
+            await wait_msg.delete()
+            await message.answer("❌ Ошибка парсинга. Попробуйте позже.")
+            
+    except ValueError:
+        await message.answer(t[lang]['invalid_limit'])
 
 @dp.message(F.text.in_({'⚙️ Настройки', '⚙️ Settings'}))
 async def settings_menu(message: Message):
     lang = user_lang.get(message.from_user.id, 'ru')
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t[lang]['change_lang'], callback_data="change_lang")],
-        [InlineKeyboardButton(text=t[lang]['back'], callback_data="back")]
-    ])
-    await message.answer(t[lang]['settings'], parse_mode="Markdown", reply_markup=kb)
+    await message.answer(t[lang]['settings'], parse_mode="Markdown", reply_markup=get_settings_keyboard(lang))
 
 @dp.callback_query(lambda c: c.data == "change_lang")
 async def change_lang(callback: CallbackQuery):
@@ -726,7 +523,7 @@ async def get_ticket_desc(message: Message, state: FSMContext):
     lang = user_lang.get(user_id, 'ru')
     name = message.from_user.full_name
     
-    active_tickets[user_id] = {'title': title, 'desc': desc}
+    active_tickets[user_id] = {'title': title, 'desc': desc, 'user': user_id, 'name': name}
     
     for admin_id in ADMIN_IDS:
         await bot.send_message(
@@ -802,10 +599,7 @@ async def admin_stats(message: Message):
     
     lang = user_lang.get(message.from_user.id, 'ru')
     await message.answer(
-        t[lang]['admin_stats'].format(
-            tickets=len(active_tickets),
-            payments=len(pending_payments)
-        ),
+        t[lang]['admin_stats'].format(tickets=len(active_tickets)),
         parse_mode="Markdown"
     )
 
@@ -818,10 +612,7 @@ async def unknown(message: Message, state: FSMContext):
 async def main():
     print("🚀 Бот ParsTape запущен!")
     print(f"👑 Админы: {ADMIN_IDS}")
-    print(f"💰 Цена: {PRICE_PER_REQUEST} ₽ за товар")
-    print("📌 Команды админа:")
-    print("   admapp_USERID - подтвердить оплату")
-    print("   admin_USERID - отклонить оплату")
+    print("📌 Парсинг доступен только админам")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
