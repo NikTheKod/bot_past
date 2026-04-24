@@ -11,8 +11,7 @@ from typing import Dict
 
 # --- КОНФИГ ---
 BOT_TOKEN = "8307763743:AAGt5tZAnzu8inHZse5X_N1dw-fIN9Ek1fU"
-# Админы: добавьте ID через переменную окружения в Railway
-ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "8444790051").split(",")]
+ADMIN_IDS = [8444790051]  # Ваш ID админа
 
 logging.basicConfig(level=logging.INFO)
 
@@ -34,6 +33,7 @@ translations = {
         'settings_text': "Здесь вы можете изменить язык или просмотреть данные.",
         'change_lang': "🌐 Изменить язык",
         'back': "◀️ Назад",
+        'menu': "🏠 Меню",
         'create_ticket': "📝 Создать тикет",
         'enter_title': "Введите название вашего вопроса/проблемы:",
         'enter_description': "Теперь введите подробное описание:",
@@ -42,6 +42,7 @@ translations = {
         'ticket_created_notify': "📩 Новый тикет от {name}\nНазвание: {title}\nОписание: {desc}",
         'ticket_closed': "✅ Тикет закрыт. Спасибо!",
         'no_active_tickets': "Нет активных тикетов.",
+        'unknown_command': "❌ Неизвестная команда. Пожалуйста, используйте кнопки меню.",
     },
     'en': {
         'welcome': "🇬🇧 Welcome to ParsTape!\nYour custom marketplace parsing service.",
@@ -54,6 +55,7 @@ translations = {
         'settings_text': "Here you can change language or view info.",
         'change_lang': "🌐 Change language",
         'back': "◀️ Back",
+        'menu': "🏠 Menu",
         'create_ticket': "📝 Create ticket",
         'enter_title': "Enter the title of your issue:",
         'enter_description': "Now enter a detailed description:",
@@ -62,6 +64,7 @@ translations = {
         'ticket_created_notify': "📩 New ticket from {name}\nTitle: {title}\nDescription: {desc}",
         'ticket_closed': "✅ Ticket closed. Thank you!",
         'no_active_tickets': "No active tickets.",
+        'unknown_command': "❌ Unknown command. Please use the menu buttons.",
     }
 }
 
@@ -78,7 +81,10 @@ def get_main_keyboard(lang):
     return types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 def get_back_keyboard(lang):
-    kb = [[types.KeyboardButton(text=translations[lang]['back'])]]
+    kb = [
+        [types.KeyboardButton(text=translations[lang]['back'])],
+        [types.KeyboardButton(text=translations[lang]['menu'])]
+    ]
     return types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 def get_settings_keyboard(lang):
@@ -137,6 +143,13 @@ async def back_to_main(event, state: FSMContext):
         await event.answer()
     else:
         await event.answer(translations[lang]['main_menu'], reply_markup=get_main_keyboard(lang))
+
+# Кнопка Меню
+@dp.message(F.text.in_({'🏠 Меню', '🏠 Menu'}))
+async def menu_button(message: Message, state: FSMContext):
+    await state.clear()
+    lang = user_lang.get(message.from_user.id, 'ru')
+    await message.answer(translations[lang]['main_menu'], reply_markup=get_main_keyboard(lang))
 
 @dp.message(F.text.in_({'🕸️ Парсинг', '🕸️ Parsing'}))
 async def parsing_unavailable(message: Message):
@@ -234,10 +247,24 @@ async def close_ticket(message: Message):
 @dp.message(Command("admin"))
 async def admin_check(message: Message):
     user_id = message.from_user.id
+    lang = user_lang.get(user_id, 'ru')
     if user_id in ADMIN_IDS:
         await message.answer(f"✅ Вы администратор! Ваш ID: {user_id}\nАктивных тикетов: {len(active_tickets)}")
     else:
         await message.answer(f"❌ Вы не администратор. Ваш ID: {user_id}")
+
+# Обработчик неизвестных команд (ловушка для всего остального)
+@dp.message()
+async def unknown_command(message: Message, state: FSMContext):
+    # Проверяем, не находится ли пользователь в процессе создания тикета
+    current_state = await state.get_state()
+    if current_state:
+        # Если пользователь в диалоге создания тикета, игнорируем или предупреждаем
+        lang = user_lang.get(message.from_user.id, 'ru')
+        await message.answer(translations[lang]['unknown_command'])
+    else:
+        lang = user_lang.get(message.from_user.id, 'ru')
+        await message.answer(translations[lang]['unknown_command'], reply_markup=get_main_keyboard(lang))
 
 async def main():
     await dp.start_polling(bot)
